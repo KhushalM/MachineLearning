@@ -12,7 +12,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
-import pygame
+
+
+
 
 # ---------------------
 # 1. Replay Buffer
@@ -187,7 +189,7 @@ def plot_rewards_losses(rewards, losses):
 # ---------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DQN Training")
-    parser.add_argument("--env_id", type=str, default="CartPole-v1", help="Environment ID")
+    parser.add_argument("--env_id", type=str, default="LunarLander-v3", help="Environment ID")
     parser.add_argument("--episodes", type=int, default=500, help="Number of episodes")
     parser.add_argument("--cfg", type=str, default="DQNConfig", help="Configuration class")
     parser.add_argument("--render", type=bool, default=True, help="Render environment")
