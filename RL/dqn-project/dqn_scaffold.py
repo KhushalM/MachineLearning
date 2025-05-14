@@ -3,14 +3,16 @@ import argparse
 import random
 from collections import deque
 from dataclasses import dataclass
-import re
 from typing import Tuple
+import matplotlib.pyplot as plt
 
-import gymnasium as gymnasium
+import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import time
+import pygame
 
 # ---------------------
 # 1. Replay Buffer
@@ -45,12 +47,12 @@ class ReplayBuffer:
 # ---------------------
 
 class QNetwork(nn.Module):
-    def __init__(self, state_size: int, action_size: int, hidden_sizes: Tuple[int, ...] = (128, 128, 64, 64)) -> None:
+    def __init__(self, state_size: int, action_size: int, hidden_sizes: Tuple[int, ...] = (128, 128)) -> None:
         super().__init__()
         layers = []
         in_dim = state_size
         for h in hidden_sizes:
-            layers.extend([nn.Linear(in_dim, action_size), nn.ReLU()])
+            layers.extend([nn.Linear(in_dim, h), nn.ReLU()])
             in_dim = h
         layers.append(nn.Linear(in_dim, action_size))
         self.model = nn.Sequential(*layers)
@@ -79,23 +81,23 @@ class DQNAgent:
         self.config = config
         self.online_network = QNetwork(state_size, action_size)
         self.target_network = QNetwork(state_size, action_size)
-        self.target_net.load_state_dict(self.online_net.state_dict())
-        self.optimizer = optim.AdamW(self.online_net.parameters(), lr=config.lr)
+        self.target_network.load_state_dict(self.online_network.state_dict())
+        self.optimizer = optim.AdamW(self.online_network.parameters(), lr=config.lr)
         self.replay_buffer = ReplayBuffer(config.buffer_capacity, (state_size,))
         self.steps_done = 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.online_net.to(self.device)
-        self.target_net.to(self.device)
+        self.online_network.to(self.device)
+        self.target_network.to(self.device)
     
     def select_action(self, state: np.ndarray) -> int:
-        eps_threshold = self.config.epsilon_final + (self.config.epsilon_start - self.config.epsilon_end) * np.exp(-self.steps_done / self.config.epsilon_decay)        
-        self.step_done += 1
+        eps_threshold = self.config.epsilon_final + (self.config.epsilon_start - self.config.epsilon_final) * np.exp(-self.steps_done / self.config.epsilon_decay)        
+        self.steps_done += 1
         if random.random() < eps_threshold:
             return random.randrange(self.action_size)
         else:
             with torch.no_grad():
                 state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-                q_values = self.online_net(state_t)
+                q_values = self.online_network(state_t)
                 return int(torch.argmax(q_values).item())
 
     def optimize_model(self) -> None:
@@ -108,30 +110,31 @@ class DQNAgent:
         next_states = next_state.to(self.device)
         done = done.to(self.device)
         
-        q_values = self.online_net(states).gather(1, actions).squeeze()
+        q_values = self.online_network(states).gather(1, actions).squeeze()
         with torch.no_grad():
-            max_next_q = self.target_net(next_states).max(1)[0]
+            max_next_q = self.target_network(next_states).max(1)[0]
             targets = rewards + self.config.gamma*max_next_q*(~done)
-        loss = nn.funcational.mse_loss(q_values, targets)
+        loss = nn.functional.mse_loss(q_values, targets)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         return loss.item()
     
     def maybe_update_target(self):
-        if self.step_done % self.config.target_update_interval == 0:
-            self.target_net.load_state_dict(self.online_net.state_dict())
+        if self.steps_done % self.config.target_update_interval == 0:
+            self.target_network.load_state_dict(self.online_network.state_dict())
 
 # ---------------------
 # 4. Training Loop
 # ---------------------
-def train(env_id: str, episodes: int, cfg: DQNConfig) -> None:
-    env = gym.make(env_id)
+def train(env_id: str, episodes: int, cfg: DQNConfig, render: bool = True, fps: float = 30.0) -> None:
+    env = gym.make(env_id, render_mode="human")
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     agent = DQNAgent(state_size, action_size, cfg)
             
     rewards = []
+    losses = []
     for ep in range(episodes):
         state, _ = env.reset()
         done = False
@@ -146,14 +149,38 @@ def train(env_id: str, episodes: int, cfg: DQNConfig) -> None:
 
             loss = agent.optimize_model()
             agent.maybe_update_target()
+
+            if render:
+                env.render()
+                time.sleep(1.0/fps)
             
         rewards.append(ep_reward)
+        losses.append(loss)
         print(f"Episode {ep+1}: reward={ep_reward}, loss={loss}")
         #Early Stopping
         if env_id == 'CartPole-v1' and len(rewards) >= 100 and np.mean(rewards[-100:]) >= 475:
             print(f"Environment {env_id} solved in {ep+1} episodes")
             break
     env.close()
+    plot_rewards_losses(rewards, losses)
+
+#-------------------
+# 6. Plotting
+#-------------------
+def plot_rewards_losses(rewards, losses):
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(rewards, label="Rewards", marker="o")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.title("Rewards over Episodes")
+    # plt.subplot(1, 2, 2)
+    # plt.plot(losses, label="Loss", marker="o")
+    # plt.xlabel("Episode")
+    # plt.ylabel("Loss")
+    # plt.title("Loss over Episodes")
+    # plt.tight_layout()
+    plt.show()
             
 # ---------------------
 # 5. Main
@@ -161,8 +188,10 @@ def train(env_id: str, episodes: int, cfg: DQNConfig) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DQN Training")
     parser.add_argument("--env_id", type=str, default="CartPole-v1", help="Environment ID")
-    parser.add_argument("--episodes", type=int, default=1000, help="Number of episodes")
+    parser.add_argument("--episodes", type=int, default=500, help="Number of episodes")
     parser.add_argument("--cfg", type=str, default="DQNConfig", help="Configuration class")
+    parser.add_argument("--render", type=bool, default=True, help="Render environment")
+    parser.add_argument("--fps", type=float, default=30.0, help="Frames per second")
     args = parser.parse_args()
 
     random.seed(42)
@@ -171,7 +200,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     config = DQNConfig()
-    train(args.env_id, args.episodes, config)
+    train(args.env_id, args.episodes, config, args.render, args.fps)
             
 
             
