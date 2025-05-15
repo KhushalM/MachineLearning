@@ -49,18 +49,23 @@ class ReplayBuffer:
 # ---------------------
 
 class QNetwork(nn.Module):
-    def __init__(self, state_size: int, action_size: int, hidden_sizes: Tuple[int, ...] = (128, 128)) -> None:
+    def __init__(self, state_size: int, action_size: int, hidden_sizes: Tuple[int, ...] = (128, 128, 64, 64)) -> None:
         super().__init__()
-        layers = []
+        trunk = []
         in_dim = state_size
         for h in hidden_sizes:
-            layers.extend([nn.Linear(in_dim, h), nn.ReLU()])
+            trunk.extend([nn.Linear(in_dim, h), nn.ReLU()])
             in_dim = h
-        layers.append(nn.Linear(in_dim, action_size))
-        self.model = nn.Sequential(*layers)
-    
+        self.trunk = nn.Sequential(*trunk)
+        self.value = nn.Linear(in_dim, 1)
+        self.advantage = nn.Linear(in_dim, action_size)    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        x = self.trunk(x)
+        value = self.value(x)
+        advantage = self.advantage(x)
+        q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        return q_values
 
 # ---------------------
 # 3. DQN Agent
@@ -129,7 +134,7 @@ class DQNAgent:
 # ---------------------
 # 4. Training Loop
 # ---------------------
-def train(env_id: str, episodes: int, cfg: DQNConfig, render: bool = True, fps: float = 30.0) -> None:
+def train(env_id: str, episodes: int, cfg: DQNConfig, render: bool = False, fps: float = 30.0) -> None:
     env = gym.make(env_id, render_mode="human")
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
@@ -189,10 +194,10 @@ def plot_rewards_losses(rewards, losses):
 # ---------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DQN Training")
-    parser.add_argument("--env_id", type=str, default="LunarLander-v3", help="Environment ID")
+    parser.add_argument("--env_id", type=str, default="CartPole-v1", help="Environment ID")
     parser.add_argument("--episodes", type=int, default=500, help="Number of episodes")
     parser.add_argument("--cfg", type=str, default="DQNConfig", help="Configuration class")
-    parser.add_argument("--render", type=bool, default=True, help="Render environment")
+    parser.add_argument("--render", type=bool, default=False, help="Render environment")
     parser.add_argument("--fps", type=float, default=30.0, help="Frames per second")
     args = parser.parse_args()
 
