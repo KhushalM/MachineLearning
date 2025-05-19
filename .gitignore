@@ -4,4 +4,4 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
-RL/dqn-project/dqn_venv
+RL/dqn_venv

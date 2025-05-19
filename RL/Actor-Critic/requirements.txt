@@ -1,0 +1,7 @@
+gymnasium
+matplotlib
+numpy
+torch
+pygame  
+gymnasium[box2d]
+box2d-py
