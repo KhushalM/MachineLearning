@@ -14,80 +14,95 @@ class Trainer:
     def __init__(self, env_id = 'Cartpole-v1', episodes = 1000, render = False):
         self.env, self.obs_dim, self.act_dim = env(env_id, render)
         self.actor, self.critic = Actor(self.obs_dim, self.act_dim), Critic(self.obs_dim)
-        self.opt_actor = optim.AdamW(self.actor.parameters(), 3e-4)
-        self.opt_critic = optim.AdamW(self.critic.parameters(), 1e-4)
+        self.opt_actor = optim.Adam(self.actor.parameters(), lr=1e-4)
+        self.opt_critic = optim.Adam(self.critic.parameters(), lr=5e-4)
         self.gamma = 0.99
         self.rewards = []
         self.actor_losses = []
+        self.critic_losses = []    
     
     def train(self, episodes = 1000, render = False):
         print(f"Starting training for {episodes} episodes...")
         for episode in range(episodes):
-            obs, done, traj = self.env.reset()[0], False, []
+            obs, done, total_reward = self.env.reset()[0], False, 0
+            obs_list, act_list, td_error_list = [], [], []
             while not done:
                 obs_t = torch.tensor(obs, dtype=torch.float32)
                 dist = self.actor(obs_t)
                 action = dist.sample().item()
                 next_obs, reward, terminated, truncated, _ = self.env.step(action)
                 done = terminated or truncated
-                traj.append((obs, action, reward))
+
+                obs_list.append(obs_t)
+                act_list.append(action)
+
+                value = self.critic(obs_t)
+                value_next = self.critic(torch.tensor(next_obs, dtype=torch.float32)).detach() if not done else 0
+
+                td_target = reward + self.gamma * value_next
+                td_error = (td_target - value)
+                td_error_list.append(td_error.detach())
+
+                total_reward += reward
                 obs = next_obs
-    
-            obs_batch, act_batch, reward_batch = zip(*traj)
-            # Convert obs_batch to numpy array for faster tensor creation
-            obs_tensor = torch.tensor(np.array(obs_batch), dtype=torch.float32)
-            returns = DiscountCumsum(reward_batch, self.gamma)()
-            returns = torch.tensor(returns, dtype=torch.float32)
+            
+            advantage = torch.stack(td_error_list)
+            advantages = (advantage - advantage.mean()) / (advantage.std() + 1e-10)
 
-            # For actor loss (detach critic values)
-            values_detached = self.critic(obs_tensor).detach()
-            advantage = returns - values_detached
-
+            obs_tensor = torch.stack(obs_list)
+            act_tensor = torch.tensor(act_list)
             dists = self.actor(obs_tensor)
-            log_probs = dists.log_prob(torch.tensor(act_batch))
-            actor_loss = -(log_probs * advantage).mean()
-            self.rewards.append(reward)
-            self.actor_losses.append(actor_loss.item())
+            log_probs = dists.log_prob(act_tensor)
+
+            actor_loss = -(log_probs * advantages).mean()
+        
+
             self.opt_actor.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
             self.opt_actor.step()
 
-            # For critic loss (no detach)
             values = self.critic(obs_tensor)
-            critic_loss = nn.MSELoss()(values, returns)
+            td_target = values + advantages
+            critic_loss = ((td_target - values)**2).mean()
+            
             self.opt_critic.zero_grad()
             critic_loss.backward()
             self.opt_critic.step()
 
-            if episode % 10 == 0:
-                print(f"Episode {episode}: actor_loss={actor_loss.item()}, critic_loss={critic_loss.item()}")
-
-            # At the end of each episode, store total reward and actor loss
-            self.rewards.append(sum(reward_batch))
+            self.rewards.append(total_reward)
             self.actor_losses.append(actor_loss.item())
+            self.critic_losses.append(critic_loss.item())
+
+            if episode % 10 == 0:
+                print(f"Episode {episode}: reward={total_reward}, actor_loss={actor_loss.item()}, critic_loss={critic_loss.item()}")
         
-        # Print completion message after final episode
         if episode == episodes - 1:
             print("Training complete.")
     
     def plot_rewards_losses(self):
-        # Plot every 100 episodes
         step = 100
         episodes = list(range(0, len(self.rewards), step))
         rewards = [self.rewards[i] for i in episodes]
         actor_losses = [self.actor_losses[i] for i in episodes]
+        critic_losses = [self.critic_losses[i] for i in episodes]
 
         plt.figure(figsize=(12, 5))
         plt.subplot(1, 2, 1)
-        plt.plot(episodes, rewards, 'g', label="Rewards", marker="o")
+        plt.plot(episodes, rewards, 'g', label="Rewards", marker="o", color="green")
         plt.xlabel("Episode")
         plt.ylabel("Reward")
         plt.title("Rewards over Episodes")
         plt.subplot(1, 2, 2)
-        plt.plot(episodes, actor_losses, 'b', label="Actor Loss", marker="o")
+        plt.plot(episodes, actor_losses, 'b', label="Actor Loss", marker="o", color="blue")
         plt.xlabel("Episode")
         plt.ylabel("Actor Loss")
         plt.title("Actor Loss over Episodes")
+        plt.subplot(1, 2, 2)
+        plt.plot(episodes, critic_losses, 'r', label="Critic Loss", marker="o", color="red")
+        plt.xlabel("Episode")
+        plt.ylabel("Critic Loss")
+        plt.title("Critic Loss over Episodes")
         plt.show()
     
     
